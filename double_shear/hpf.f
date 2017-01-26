@@ -37,10 +37,14 @@
       save icalld
       data icalld /0/
 
+!     prabal
+      real hpfcx(lx1,ly1,lz1,lelt), hpfcy(lx1,ly1,lz1,lelt)
+      real hpfcz(lx1,ly1,lz1,lelt)
+
 !---------------------------------------- 
 
-      hpf_kut = 1
-      hpf_kai = -0.3*5000.0
+      hpf_kut = 3
+      hpf_kai = -0.1*5000.0
       hpf_ifboyd = .false.
 
       nel = nelfld(ifield)
@@ -69,7 +73,7 @@
 
 !       Create the filter transfer function
 !       Weighted with hpf_kai
-        call hpf_trns_fcn(hpf_filter,hpf_kut,hpf_kai)
+        call hpf_trns_fcn(hpf_filter,hpf_kut)
 
 !       Build the matrix to apply the filter function
 !       to an input tensor field
@@ -86,14 +90,22 @@
         call build_hpf_fld(hpfy,vy,op_mat,nx1,nz1)
         if (if3d) call build_hpf_fld(hpfz,vz,op_mat,nx1,nz1)
 
+        call cmult(hpfx,hpf_kai,n)    
+        call cmult(hpfy,hpf_kai,n)    
+        if (if3d) call cmult(hpfz,hpf_kai,n)    
+
+!       prabal    
+        call get_spec_coeff(hpfcx,hpfx)    
+        call get_spec_coeff(hpfcy,hpfy)    
+        call get_spec_coeff(hpfcz,hpfz)    
+
 !       Multiply by Mass matrix 
 !       and add to forcing term 
         call opadd2col (bfx,bfy,bfz,hpfx,hpfy,hpfz,bm1)
 
 !       prabal. Testing
-        if (nio.eq.0) write(6,*) 'Appling hpf'     
         if (mod(ISTEP,IOSTEP).eq.0) then
-          call outpost(hpfx,hpfy,hpfz,pr,t,'hpf')
+          call outpost(hpfcx,hpfcy,hpfcz,pr,t,'hpf')
         endif      
 
       else
@@ -177,7 +189,6 @@ c-----------------------------------------------------------------------
 
       implicit none
 
-!      include 'SIZE_DEF'
       include 'SIZE'
 
       logical IFBOYD 
@@ -232,7 +243,6 @@ c----------------------------------------------------------------------
 
       real w1(nxyz*lelt),w2(nxyz*lelt)    ! work arrays
       real v(nxyz,lelt),u(nxyz,lelt)      ! output and input flds
-
 c
       integer nx,nz
 
@@ -261,8 +271,10 @@ c         Filter
           enddo
           call mxm (w2,nx*nx,ft,nx,w1,nx)
 
-          call sub3(w2,v(1,e),w1,nxyz)
-          call copy(v(1,e),w2,nxyz)
+!          call sub3(w2,v(1,e),w1,nxyz)
+!          call copy(v(1,e),w2,nxyz)
+          call copy(v(1,e),w1,nxyz)  
+
         enddo
       else
         do e=1,nel
@@ -271,8 +283,9 @@ c         Filter
           call mxm(f ,nx,w1,nx,w2,nx)
           call mxm(w2,nx,ft,nx,w1,nx)
 
-          call sub3(w2,v(1,e),w1,nxyz)
-          call copy(v(1,e),w2,nxyz)
+!          call sub3(w2,v(1,e),w1,nxyz)
+!          call copy(v(1,e),w2,nxyz)
+          call copy(v(1,e),w1,nxyz) 
         enddo
       endif
 c
@@ -281,22 +294,19 @@ c
 
 c---------------------------------------------------------------------- 
 
-      subroutine hpf_trns_fcn(diag,kut,wght)
+      subroutine hpf_trns_fcn(intv,kut)
 
       implicit none
 
-!      include 'SIZE_DEF'
       include 'SIZE'
-!      include 'INPUT_DEF'
       include 'INPUT'
-!      include 'PARALLEL_DEF'
       include 'PARALLEL'
 
       real diag(lx1*lx1)
       real intv(lx1*lx1)
       integer nx,k0,kut,kk,k
 
-      real amp,wght
+      real amp
 
 c     Set up transfer function
 c
@@ -304,19 +314,18 @@ c
       call ident   (diag,nx)
       call rzero   (intv,nx*nx) 
 c
-
       k0 = nx-kut
       do k=k0+1,nx
         kk = k+nx*(k-1)
         amp = (k-k0)*(k-k0)/(kut*kut)     ! Normalized amplitude. quadratic growth
         diag(kk) = 1.-amp
-        intv(kk) = wght*amp               ! weighted amplitude          
+        intv(kk) = amp               ! weighted amplitude          
       enddo
 
 !     Output normalized transfer function
       k0 = lx1+1
       if (nio.eq.0) then
-        write(6,6) 'HPF :',(intv(k)/wght,k=1,lx1*lx1,k0)
+        write(6,6) 'HPF :',((intv(k)), k=1,lx1*lx1,k0)
    6    format(a8,16f9.6,6(/,8x,16f9.6))
       endif
 
@@ -383,3 +392,54 @@ c
 
 !=======================================================================
 
+      subroutine get_spec_coeff(coeff,fld)
+
+!     Builds the operator for high pass filtering
+!     Transformation matrix from nodal to modal space.
+
+      implicit none
+
+      include 'SIZE'
+
+      integer n
+      parameter (n=lx1*lx1)
+      integer lm, lm2
+      parameter (lm=40)
+      parameter (lm2=lm*lm)
+
+      real ref_xmap(lm2)
+      real inv_xmap(lm2)
+
+      real wk1(lm2),wk2(lm2)
+      real indr(lm),ipiv(lm),indc(lm)
+
+      real rmult(lm)
+      integer ierr
+
+      real fld(lx1*ly1*lz1*lelv),coeff(lx1*ly1*lz1*lelv)
+
+      integer icalld
+      save icalld
+      data icalld /0/
+      logical ifboyd
+      
+      
+      if (icalld.eq.0) then
+
+        ifboyd = .false.
+        call spec_coeff_init(ref_xmap,ifboyd)
+      
+        call copy(inv_xmap,ref_xmap,lm2)
+
+        call gaujordf  (inv_xmap,lx1,lx1,indr,indc,ipiv,ierr,rmult)  ! xmap inverse
+        icalld = icalld + 1
+      endif
+
+!     Apply inv_xmap operator to fld 
+      call build_hpf_fld(coeff,fld,inv_xmap,nx1,nz1)
+
+
+      return
+      end subroutine get_spec_coeff
+
+!---------------------------------------------------------------------- 

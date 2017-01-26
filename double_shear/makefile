@@ -1,7 +1,7 @@
-### makefile automatically created by makenek 01/26/2017 19:22:06 ###
+### makefile automatically created by makenek 01/27/2017 00:55:00 ###
 BINNAME=nek5000
 LIBNAME=libnek5000.a
-CASENAME:=double_shear
+CASENAME:=hpf
 CASEDIR:=/home/prabal/workstation/git_me/NekExamples/double_shear
 S:=/home/prabal/workstation/git_me/Nek5000/core
 S2:=/home/prabal/workstation/git_me/Nek5000/core/cmt
